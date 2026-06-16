@@ -1,10 +1,13 @@
 package store
 
 import (
-	"fmt"
-	"os"
+	"context"
 	"database/sql"
+	"fmt"
 	"io/fs"
+	"os"
+	"time"
+
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/pressly/goose/v3"
 )
@@ -19,6 +22,21 @@ func Open() (*sql.DB, error) {
 		return nil, fmt.Errorf("db: open %w", err)
 	}
 
+	// Retry ping up to 10 times to handle Railway cold-start delays
+	for i := range 10 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = db.PingContext(ctx)
+		cancel()
+		if err == nil {
+			break
+		}
+		fmt.Printf("Waiting for database... attempt %d/10: %v\n", i+1, err)
+		time.Sleep(2 * time.Second)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: ping %w", err)
+	}
+
 	fmt.Println("Connected to database...")
 
 	return db, nil
@@ -26,7 +44,7 @@ func Open() (*sql.DB, error) {
 
 func MigrateFS(db *sql.DB, migrationFS fs.FS, dir string) error {
 	goose.SetBaseFS(migrationFS)
-	defer func () {
+	defer func() {
 		goose.SetBaseFS(nil)
 	}()
 	return Migrate(db, dir)
